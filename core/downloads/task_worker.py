@@ -237,6 +237,19 @@ def download_track_worker(task_id: str, batch_id: Optional[str], deps: TaskWorke
         # Add legacy fallback queries (like GUI does)
         legacy_queries = []
 
+        def _sanitize_legacy_query(raw: str) -> str:
+            # Legacy fallbacks build queries straight from the raw track title.
+            # Tracks ripped from DJ-mix tracklists etc. carry titles like
+            # "- Skaeliptom - 07 )- - Strigoi (Grav's i Sävenäs edit)" — searched
+            # verbatim these are guaranteed 0-result Soulseek queries that each
+            # burn a full ~45s poll. Run them through the same normalizer the
+            # matching engine uses for its "smart" queries, and drop anything
+            # that degrades to mostly punctuation (can never match).
+            cleaned = deps.matching_engine.normalize_string(raw)
+            if sum(c.isalnum() for c in cleaned) < 3:
+                return ''
+            return cleaned
+
         if artist_name:
             # Add first word of artist approach (legacy compatibility)
             artist_words = artist_name.split()
@@ -246,18 +259,24 @@ def download_track_worker(task_id: str, batch_id: Optional[str], deps: TaskWorke
                     first_word = artist_words[1]
 
                 if len(first_word) > 1:
-                    legacy_queries.append(f"{track_name} {first_word}".strip())
+                    q = _sanitize_legacy_query(f"{track_name} {first_word}")
+                    if q:
+                        legacy_queries.append(q)
 
         # Add track-only query
         if track_name.strip():
-            legacy_queries.append(track_name.strip())
+            q = _sanitize_legacy_query(track_name)
+            if q:
+                legacy_queries.append(q)
 
         # Add traditional cleaned queries
         cleaned_name = re.sub(r'\s*\([^)]*\)', '', track_name).strip()
         cleaned_name = re.sub(r'\s*\[[^\]]*\]', '', cleaned_name).strip()
 
         if cleaned_name and cleaned_name.lower() != track_name.lower():
-            legacy_queries.append(cleaned_name.strip())
+            q = _sanitize_legacy_query(cleaned_name)
+            if q:
+                legacy_queries.append(q)
 
         # Combine enhanced queries with legacy fallbacks.
         #
