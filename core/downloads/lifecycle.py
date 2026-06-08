@@ -586,6 +586,41 @@ def on_download_completed(batch_id: str, task_id: str, success: bool, deps: Life
                         except Exception as cons_err:
                             logger.error(f"[Album Consistency] Failed (non-fatal): {cons_err}")
 
+                # ALBUM COMPLETENESS VERIFICATION: Report download completeness against source
+                # metadata (Spotify/Deezer total_tracks). Missing tracks are already re-queued
+                # for retry by submit_failed_to_wishlist below — this surfaces them in logs so
+                # it's clear whether an album finished fully or has gaps.
+                if batch.get('is_album_download'):
+                    try:
+                        _cpl_album = batch.get('album_context') or {}
+                        _cpl_artist = batch.get('artist_context') or {}
+                        _cpl_aname = _cpl_album.get('name', '') if isinstance(_cpl_album, dict) else ''
+                        _cpl_arname = _cpl_artist.get('name', '') if isinstance(_cpl_artist, dict) else ''
+                        _cpl_expected = int(_cpl_album.get('total_tracks') or 0) if isinstance(_cpl_album, dict) else 0
+                        _cpl_failed = batch.get('permanently_failed_tracks', [])
+                        _cpl_done = sum(
+                            1 for tid in batch.get('queue', [])
+                            if tid in download_tasks
+                            and download_tasks[tid].get('status') == 'completed'
+                        )
+                        _cpl_total = _cpl_expected or (_cpl_done + len(_cpl_failed))
+                        if _cpl_failed:
+                            _cpl_names = [t.get('track_name', '?') for t in _cpl_failed]
+                            logger.warning(
+                                "[Album Completeness] '%s' by '%s': %d/%d tracks downloaded; "
+                                "%d missing — re-queuing for retry: %s",
+                                _cpl_aname, _cpl_arname, _cpl_done, _cpl_total, len(_cpl_failed),
+                                ', '.join(f'"{n}"' for n in _cpl_names[:5])
+                                + (f' … +{len(_cpl_names) - 5} more' if len(_cpl_names) > 5 else ''),
+                            )
+                        else:
+                            logger.info(
+                                "[Album Completeness] '%s' by '%s': COMPLETE — %d/%d tracks",
+                                _cpl_aname, _cpl_arname, _cpl_done, _cpl_total,
+                            )
+                    except Exception as _cpl_err:
+                        logger.debug("[Album Completeness] check error (non-fatal): %s", _cpl_err)
+
                 # Mark that wishlist processing is starting (prevents premature cleanup)
                 batch['wishlist_processing_started'] = True
 
@@ -767,6 +802,38 @@ def check_batch_completion_v2(batch_id: str, deps: LifecycleDeps) -> Optional[bo
                                     logger.error(f"[Album Consistency V2] Skipped: {_cons_result['error']}")
                         except Exception as cons_err:
                             logger.error(f"[Album Consistency V2] Failed (non-fatal): {cons_err}")
+
+                # ALBUM COMPLETENESS VERIFICATION (V2 cancel path — same logic as primary)
+                if batch.get('is_album_download'):
+                    try:
+                        _cpl_album = batch.get('album_context') or {}
+                        _cpl_artist = batch.get('artist_context') or {}
+                        _cpl_aname = _cpl_album.get('name', '') if isinstance(_cpl_album, dict) else ''
+                        _cpl_arname = _cpl_artist.get('name', '') if isinstance(_cpl_artist, dict) else ''
+                        _cpl_expected = int(_cpl_album.get('total_tracks') or 0) if isinstance(_cpl_album, dict) else 0
+                        _cpl_failed = batch.get('permanently_failed_tracks', [])
+                        _cpl_done = sum(
+                            1 for tid in batch.get('queue', [])
+                            if tid in download_tasks
+                            and download_tasks[tid].get('status') == 'completed'
+                        )
+                        _cpl_total = _cpl_expected or (_cpl_done + len(_cpl_failed))
+                        if _cpl_failed:
+                            _cpl_names = [t.get('track_name', '?') for t in _cpl_failed]
+                            logger.warning(
+                                "[Album Completeness] '%s' by '%s': %d/%d tracks downloaded; "
+                                "%d missing — re-queuing for retry: %s",
+                                _cpl_aname, _cpl_arname, _cpl_done, _cpl_total, len(_cpl_failed),
+                                ', '.join(f'"{n}"' for n in _cpl_names[:5])
+                                + (f' … +{len(_cpl_names) - 5} more' if len(_cpl_names) > 5 else ''),
+                            )
+                        else:
+                            logger.info(
+                                "[Album Completeness] '%s' by '%s': COMPLETE — %d/%d tracks",
+                                _cpl_aname, _cpl_arname, _cpl_done, _cpl_total,
+                            )
+                    except Exception as _cpl_err:
+                        logger.debug("[Album Completeness] check error (non-fatal): %s", _cpl_err)
 
         # Process wishlist outside of the lock to prevent threading issues
         if all_tasks_started and no_active_workers and all_tasks_truly_finished and not has_retrying_tasks:
