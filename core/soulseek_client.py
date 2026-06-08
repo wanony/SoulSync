@@ -119,6 +119,16 @@ class SoulseekClient(DownloadSourcePlugin):
         self.download_path: Path = Path("./downloads")
         self.active_searches: Dict[str, bool] = {}  # search_id -> still_active
 
+        # slskd hard-rejects overlapping search operations with HTTP 429
+        # ("Only one concurrent operation is permitted"). Soulsync runs many
+        # download workers in parallel, each starting its own search — without
+        # serializing, most POSTs collide, return None, and the worker sits in
+        # 'searching' for 10+ minutes until the stuck-task safety valve force-
+        # fails it. Mirror slskd's own constraint by holding one search at a
+        # time end-to-end (start through completion), so workers queue cleanly
+        # instead of 429-storming and hanging.
+        self._search_lock = asyncio.Lock()
+
         # Rate limiting for searches. Cap + window stay hardcoded —
         # nobody has reported issues with the 35/220 defaults. The
         # min-delay knob is the actual fix for the Reddit-reported
@@ -619,6 +629,10 @@ class SoulseekClient(DownloadSourcePlugin):
         # Apply rate limiting before search
         await self._wait_for_rate_limit()
 
+        # Hold the search lock for the full lifecycle (POST through completion) —
+        # slskd refuses to start a new search while one is already running, so
+        # parallel workers must queue here rather than collide with 429s.
+        await self._search_lock.acquire()
         try:
             logger.info(f"Starting search for: '{query}' (slskd timeout: {timeout}s)")
 
@@ -740,7 +754,8 @@ class SoulseekClient(DownloadSourcePlugin):
             # Remove from active searches when done
             if 'search_id' in locals() and search_id in self.active_searches:
                 del self.active_searches[search_id]
-    
+            self._search_lock.release()
+
     async def download(self, username: str, filename: str, file_size: int = 0) -> Optional[str]:
         if not self.base_url:
             logger.debug("Soulseek client not configured")
