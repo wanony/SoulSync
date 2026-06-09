@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import traceback
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -338,6 +339,15 @@ def download_track_worker(task_id: str, batch_id: Optional[str], deps: TaskWorke
                         _exclude_for_hybrid_album = ['torrent', 'usenet']
                 except Exception as _exc_filter_err:
                     logger.debug("[Modal Worker] album-source-exclusion check failed: %s", _exc_filter_err)
+                # Reset safety-valve timer: measure from when this query actually
+                # starts, not from when the task entered 'searching'. Tasks queued
+                # behind the asyncio.Lock legitimately wait 60s+ per earlier task
+                # before their turn arrives, which could exceed the 600s threshold
+                # before they've even attempted a single search.
+                with tasks_lock:
+                    if task_id in download_tasks:
+                        download_tasks[task_id]['status_change_time'] = time.time()
+
                 # Perform search with timeout
                 tracks_result, _ = deps.run_async(deps.download_orchestrator.search(
                     query, timeout=30, exclude_sources=_exclude_for_hybrid_album,

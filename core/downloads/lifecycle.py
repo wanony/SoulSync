@@ -598,10 +598,14 @@ def on_download_completed(batch_id: str, task_id: str, success: bool, deps: Life
                         _cpl_arname = _cpl_artist.get('name', '') if isinstance(_cpl_artist, dict) else ''
                         _cpl_expected = int(_cpl_album.get('total_tracks') or 0) if isinstance(_cpl_album, dict) else 0
                         _cpl_failed = batch.get('permanently_failed_tracks', [])
-                        _cpl_done = sum(
-                            1 for tid in batch.get('queue', [])
-                            if tid in download_tasks
-                            and download_tasks[tid].get('status') == 'completed'
+                        # Count successful downloads as total minus failed minus cancelled.
+                        # Checking status == 'completed' misses tracks still in
+                        # 'post_processing' at check time (the normal case when the
+                        # batch completes before post-processing workers finish).
+                        _cpl_done = (
+                            len(batch.get('queue', []))
+                            - len(_cpl_failed)
+                            - len(batch.get('cancelled_tracks', set()))
                         )
                         _cpl_total = _cpl_expected or (_cpl_done + len(_cpl_failed))
                         if _cpl_failed:
@@ -812,10 +816,14 @@ def check_batch_completion_v2(batch_id: str, deps: LifecycleDeps) -> Optional[bo
                         _cpl_arname = _cpl_artist.get('name', '') if isinstance(_cpl_artist, dict) else ''
                         _cpl_expected = int(_cpl_album.get('total_tracks') or 0) if isinstance(_cpl_album, dict) else 0
                         _cpl_failed = batch.get('permanently_failed_tracks', [])
-                        _cpl_done = sum(
-                            1 for tid in batch.get('queue', [])
-                            if tid in download_tasks
-                            and download_tasks[tid].get('status') == 'completed'
+                        # Count successful downloads as total minus failed minus cancelled.
+                        # Checking status == 'completed' misses tracks still in
+                        # 'post_processing' at check time (the normal case when the
+                        # batch completes before post-processing workers finish).
+                        _cpl_done = (
+                            len(batch.get('queue', []))
+                            - len(_cpl_failed)
+                            - len(batch.get('cancelled_tracks', set()))
                         )
                         _cpl_total = _cpl_expected or (_cpl_done + len(_cpl_failed))
                         if _cpl_failed:
