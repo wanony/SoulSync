@@ -16,6 +16,7 @@ export const shellPageIds = [
   'settings',
   'issues',
   'help',
+  'blacklist',
   'hydrabase',
 ] as const;
 
@@ -46,6 +47,7 @@ export const shellRouteManifest: readonly ShellRouteDefinition[] = [
   { pageId: 'settings', path: '/settings', kind: 'legacy' },
   { pageId: 'issues', path: '/issues', kind: 'react' },
   { pageId: 'help', path: '/help', kind: 'legacy' },
+  { pageId: 'blacklist', path: '/blacklist', kind: 'legacy' },
   { pageId: 'hydrabase', path: '/hydrabase', kind: 'legacy' },
 ] as const;
 
