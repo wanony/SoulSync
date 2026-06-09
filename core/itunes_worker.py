@@ -457,10 +457,18 @@ class iTunesWorker:
                     break
 
             if best_match:
-                self._update_album(db_id, best_match)
-                self.stats['matched'] += 1
-                matched_count += 1
-                logger.info(f"Batch matched album '{db_title}' -> iTunes ID: {best_match.id}")
+                conflict = self._has_duplicate_itunes_id(db_id, str(best_match.id))
+                if conflict:
+                    logger.warning(
+                        "Skipping iTunes ID %s for '%s' — already assigned to album '%s' (%s)",
+                        best_match.id, db_title, conflict[1], conflict[0],
+                    )
+                    self._mark_status('album', db_id, 'not_found')
+                else:
+                    self._update_album(db_id, best_match)
+                    self.stats['matched'] += 1
+                    matched_count += 1
+                    logger.info(f"Batch matched album '{db_title}' -> iTunes ID: {best_match.id}")
             else:
                 self._mark_status('album', db_id, 'not_found')
                 self.stats['not_found'] += 1
@@ -1004,6 +1012,60 @@ class iTunesWorker:
 
     # ── Name matching ──────────────────────────────────────────────────
 
+    # Suffixes that appear in parentheticals but do NOT indicate a different
+    # release (same tracklist, just marked differently). Anything not in this
+    # set is treated as an edition discriminator and causes rejection.
+    _ALLOWED_PAREN_TOKENS = frozenset({
+        'remaster', 'remastered', 're-master',
+        'explicit', 'explicit version', 'explicit content',
+        'clean', 'clean version',
+    })
+    _ALLOWED_PAREN_YEAR = re.compile(r'^\d{4}$')
+    _ALLOWED_TOKEN_YEAR = re.compile(
+        r'^(remaster|remastered|re-master|explicit|explicit version|explicit content|clean|clean version)(\s+\d{4})?$'
+    )
+
+    def _normalize_strict(self, name: str) -> str:
+        """Lowercase + remove punctuation, NO parenthetical stripping."""
+        name = name.lower().strip()
+        name = re.sub(r'\s+[-–—]\s+.*$', '', name)
+        name = re.sub(r'[^\w\s]', '', name)
+        name = re.sub(r'\s+', ' ', name).strip()
+        return name
+
+    def _extract_paren_content(self, name: str) -> str:
+        """Return lowercased text from inside the first (...) group, stripped."""
+        m = re.search(r'\(([^)]+)\)', name)
+        return m.group(1).lower().strip() if m else ''
+
+    def _is_only_allowed_suffixes(self, content: str) -> bool:
+        """True if paren content is only non-discriminating noise."""
+        if not content:
+            return True
+        if self._ALLOWED_PAREN_YEAR.match(content.strip()):
+            return True
+        if self._ALLOWED_TOKEN_YEAR.match(content.strip()):
+            return True
+        return content.strip() in self._ALLOWED_PAREN_TOKENS
+
+    def _has_duplicate_itunes_id(self, db_id: int, source_id: str):
+        """Return (album_id, title) if another album already owns this iTunes ID, else None."""
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, title FROM albums WHERE itunes_album_id = ? AND id != ?",
+                (str(source_id), db_id),
+            )
+            return cursor.fetchone()
+        except Exception as e:
+            logger.debug("Duplicate iTunes ID check failed: %s", e)
+            return None
+        finally:
+            if conn:
+                conn.close()
+
     def _normalize_name(self, name: str) -> str:
         name = name.lower().strip()
         name = re.sub(r'\s+[-–—]\s+.*$', '', name)
@@ -1013,8 +1075,37 @@ class iTunesWorker:
         return name
 
     def _name_matches(self, query_name: str, result_name: str) -> bool:
-        norm_query = self._normalize_name(query_name)
-        norm_result = self._normalize_name(result_name)
-        similarity = SequenceMatcher(None, norm_query, norm_result).ratio()
-        logger.debug(f"Name similarity: '{query_name}' vs '{result_name}' = {similarity:.2f}")
-        return similarity >= self.name_similarity_threshold
+        # Phase 1 — strict: compare with parenthetical text kept.
+        # Catches clean title matches without masking edition markers.
+        strict_q = self._normalize_strict(query_name)
+        strict_r = self._normalize_strict(result_name)
+        strict_sim = SequenceMatcher(None, strict_q, strict_r).ratio()
+        logger.debug(
+            "Name strict similarity: '%s' vs '%s' = %.2f",
+            query_name, result_name, strict_sim,
+        )
+        if strict_sim >= 0.85:
+            return True
+
+        # Phase 2 — lenient: strip parens, but guard against edition markers.
+        norm_q = self._normalize_name(query_name)
+        norm_r = self._normalize_name(result_name)
+        stripped_sim = SequenceMatcher(None, norm_q, norm_r).ratio()
+        logger.debug(
+            "Name stripped similarity: '%s' vs '%s' = %.2f",
+            query_name, result_name, stripped_sim,
+        )
+        if stripped_sim < self.name_similarity_threshold:
+            return False
+
+        result_paren = self._extract_paren_content(result_name)
+        query_paren = self._extract_paren_content(query_name)
+        if result_paren and result_paren != query_paren:
+            if not self._is_only_allowed_suffixes(result_paren):
+                logger.debug(
+                    "Edition marker '%s' in result '%s' — rejecting match for '%s'",
+                    result_paren, result_name, query_name,
+                )
+                return False
+
+        return True

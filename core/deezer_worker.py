@@ -260,6 +260,61 @@ class DeezerWorker:
             if conn:
                 conn.close()
 
+    # Suffixes that appear in parentheticals but do NOT indicate a different
+    # release (same tracklist, just marked differently). Anything not in this
+    # set is treated as an edition discriminator and causes rejection.
+    _ALLOWED_PAREN_TOKENS = frozenset({
+        'remaster', 'remastered', 're-master',
+        'explicit', 'explicit version', 'explicit content',
+        'clean', 'clean version',
+    })
+    _ALLOWED_PAREN_YEAR = re.compile(r'^\d{4}$')
+    _ALLOWED_TOKEN_YEAR = re.compile(
+        r'^(remaster(?:ed)?|re-master|explicit(?:\s+(?:version|content))?|clean(?:\s+version)?)\s+\d{4}$',
+        re.IGNORECASE,
+    )
+
+    def _normalize_strict(self, name: str) -> str:
+        """Lowercase + remove punctuation, NO parenthetical stripping."""
+        name = name.lower().strip()
+        name = re.sub(r'\s+[-–—]\s+.*$', '', name)
+        name = re.sub(r'[^\w\s]', '', name)
+        name = re.sub(r'\s+', ' ', name).strip()
+        return name
+
+    def _extract_paren_content(self, name: str) -> str:
+        """Return lowercased text from inside the first (...) group, stripped."""
+        m = re.search(r'\(([^)]+)\)', name)
+        return m.group(1).lower().strip() if m else ''
+
+    def _is_only_allowed_suffixes(self, content: str) -> bool:
+        """True if paren content is only non-discriminating noise."""
+        if not content:
+            return True
+        if self._ALLOWED_PAREN_YEAR.match(content.strip()):
+            return True
+        if self._ALLOWED_TOKEN_YEAR.match(content.strip()):
+            return True
+        return content.strip() in self._ALLOWED_PAREN_TOKENS
+
+    def _has_duplicate_deezer_id(self, db_id: int, source_id: str):
+        """Return (album_id, title) if another album already owns this Deezer ID, else None."""
+        conn = None
+        try:
+            conn = self.db._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, title FROM albums WHERE deezer_id = ? AND id != ?",
+                (str(source_id), db_id),
+            )
+            return cursor.fetchone()
+        except Exception as e:
+            logger.debug("Duplicate Deezer ID check failed: %s", e)
+            return None
+        finally:
+            if conn:
+                conn.close()
+
     def _normalize_name(self, name: str) -> str:
         """Normalize name for comparison"""
         name = name.lower().strip()
@@ -270,13 +325,40 @@ class DeezerWorker:
         return name
 
     def _name_matches(self, query_name: str, result_name: str) -> bool:
-        """Check if Deezer result name matches our query with fuzzy matching"""
-        norm_query = self._normalize_name(query_name)
-        norm_result = self._normalize_name(result_name)
+        """Check if result name matches our query with two-phase fuzzy matching."""
+        # Phase 1 — strict: compare with parenthetical text kept.
+        strict_q = self._normalize_strict(query_name)
+        strict_r = self._normalize_strict(result_name)
+        strict_sim = SequenceMatcher(None, strict_q, strict_r).ratio()
+        logger.debug(
+            "Name strict similarity: '%s' vs '%s' = %.2f",
+            query_name, result_name, strict_sim,
+        )
+        if strict_sim >= 0.85:
+            return True
 
-        similarity = SequenceMatcher(None, norm_query, norm_result).ratio()
-        logger.debug(f"Name similarity: '{query_name}' vs '{result_name}' = {similarity:.2f}")
-        return similarity >= self.name_similarity_threshold
+        # Phase 2 — lenient: strip parens, but guard against edition markers.
+        norm_q = self._normalize_name(query_name)
+        norm_r = self._normalize_name(result_name)
+        stripped_sim = SequenceMatcher(None, norm_q, norm_r).ratio()
+        logger.debug(
+            "Name stripped similarity: '%s' vs '%s' = %.2f",
+            query_name, result_name, stripped_sim,
+        )
+        if stripped_sim < self.name_similarity_threshold:
+            return False
+
+        result_paren = self._extract_paren_content(result_name)
+        query_paren = self._extract_paren_content(query_name)
+        if result_paren and result_paren != query_paren:
+            if not self._is_only_allowed_suffixes(result_paren):
+                logger.debug(
+                    "Edition marker '%s' in result '%s' — rejecting match for '%s'",
+                    result_paren, result_name, query_name,
+                )
+                return False
+
+        return True
 
     def _verify_artist_id(self, item: Dict[str, Any], result_artist_id,
                           result_artist_name: Optional[str] = None) -> bool:
@@ -477,9 +559,17 @@ class DeezerWorker:
                     logger.warning(f"Album '{album_name}' matched but full details unavailable, will retry")
                     return
 
-                self._update_album(album_id, result, full_album)
-                self.stats['matched'] += 1
-                logger.info(f"Matched album '{album_name}' -> Deezer ID: {deezer_album_id}")
+                conflict = self._has_duplicate_deezer_id(album_id, str(deezer_album_id))
+                if conflict:
+                    logger.warning(
+                        "Skipping Deezer ID %s for '%s' — already assigned to album '%s' (%s)",
+                        deezer_album_id, album_name, conflict[1], conflict[0],
+                    )
+                    self._mark_status('album', album_id, 'not_found')
+                else:
+                    self._update_album(album_id, result, full_album)
+                    self.stats['matched'] += 1
+                    logger.info(f"Matched album '{album_name}' -> Deezer ID: {deezer_album_id}")
             else:
                 self._mark_status('album', album_id, 'not_found')
                 self.stats['not_found'] += 1
