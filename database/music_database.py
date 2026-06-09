@@ -858,6 +858,9 @@ class MusicDatabase:
             except Exception as ps_err:
                 logger.error(f"Personalized-playlist schema init failed: {ps_err}")
 
+            # Add not_found_count and blacklisted columns to wishlist_tracks (migration)
+            self._add_blacklist_columns(cursor)
+
             self._ensure_core_media_schema_columns(cursor)
             self._normalize_genres_to_json(cursor)
             # Unify scattered migration state into the ledger + stamp the schema
@@ -912,6 +915,17 @@ class MusicDatabase:
             )
         except Exception as e:
             logger.debug("Could not record migration %s in ledger: %s", name, e)
+
+    def _add_blacklist_columns(self, cursor):
+        """Add not_found_count and blacklisted columns to wishlist_tracks."""
+        try:
+            cursor.execute("ALTER TABLE wishlist_tracks ADD COLUMN not_found_count INTEGER DEFAULT 0")
+        except Exception:
+            pass  # column already exists
+        try:
+            cursor.execute("ALTER TABLE wishlist_tracks ADD COLUMN blacklisted INTEGER DEFAULT 0")
+        except Exception:
+            pass  # column already exists
 
     def _sync_migration_ledger(self, cursor):
         """Back-fill the ledger from existing idempotency signals and stamp
@@ -8140,16 +8154,38 @@ class MusicDatabase:
                             # Same track exists from different album — use composite ID
                             insert_track_id = composite_id
 
+                # Check if track already exists to track not_found_count
+                is_not_found = bool(
+                    failure_reason and (
+                        'no match' in failure_reason.lower() or
+                        'not found' in failure_reason.lower()
+                    )
+                )
+                cursor.execute(
+                    "SELECT not_found_count FROM wishlist_tracks WHERE spotify_track_id = ? AND profile_id = ?",
+                    (insert_track_id, profile_id)
+                )
+                existing_row = cursor.fetchone()
+                if existing_row is not None:
+                    prev_count = existing_row[0] if existing_row[0] is not None else 0
+                    new_not_found_count = (prev_count + 1) if is_not_found else prev_count
+                else:
+                    new_not_found_count = 1 if is_not_found else 0
+                new_blacklisted = 1 if new_not_found_count >= 2 else 0
+
                 # Insert the track
                 cursor.execute("""
                     INSERT OR REPLACE INTO wishlist_tracks
-                    (spotify_track_id, spotify_data, failure_reason, source_type, source_info, date_added, profile_id)
-                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
-                """, (insert_track_id, spotify_json, failure_reason, source_type, source_json, profile_id))
+                    (spotify_track_id, spotify_data, failure_reason, source_type, source_info, date_added, profile_id, not_found_count, blacklisted)
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
+                """, (insert_track_id, spotify_json, failure_reason, source_type, source_json, profile_id, new_not_found_count, new_blacklisted))
 
                 conn.commit()
 
-                logger.info(f"Added track to wishlist: '{track_name}' by {artist_name}")
+                if new_blacklisted:
+                    logger.warning(f"Track blacklisted (not_found_count={new_not_found_count}): '{track_name}' by {artist_name}")
+                else:
+                    logger.info(f"Added track to wishlist: '{track_name}' by {artist_name}")
                 return True
 
         except Exception as e:
@@ -8193,6 +8229,7 @@ class MusicDatabase:
                            last_attempted, date_added, source_type, source_info
                     FROM wishlist_tracks
                     WHERE profile_id = ?
+                    AND (blacklisted IS NULL OR blacklisted = 0)
                 """
 
                 params: List[Any] = [profile_id]
@@ -8270,13 +8307,84 @@ class MusicDatabase:
             logger.error(f"Error updating wishlist retry status: {e}")
             return False
     
+    def get_blacklisted_tracks(self, profile_id: int = 1) -> List[Dict[str, Any]]:
+        """Get all blacklisted tracks for a profile."""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, spotify_track_id, spotify_data, failure_reason, not_found_count, date_added
+                    FROM wishlist_tracks
+                    WHERE blacklisted = 1 AND profile_id = ?
+                    ORDER BY date_added
+                """, (profile_id,))
+                rows = cursor.fetchall()
+                result = []
+                for row in rows:
+                    try:
+                        spotify_data = json.loads(row['spotify_data']) if row['spotify_data'] else {}
+                        result.append({
+                            'id': row['id'],
+                            'spotify_track_id': row['spotify_track_id'],
+                            'spotify_data': spotify_data,
+                            'failure_reason': row['failure_reason'],
+                            'not_found_count': row['not_found_count'] if row['not_found_count'] is not None else 0,
+                            'date_added': row['date_added'],
+                        })
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Error parsing blacklisted track data: {e}")
+                        continue
+                return result
+        except Exception as e:
+            logger.error(f"Error getting blacklisted tracks: {e}")
+            return []
+
+    def unblacklist_track(self, spotify_track_id: str, profile_id: int = 1) -> bool:
+        """Move a blacklisted track back to the active wishlist (reset blacklisted=0, not_found_count=0)."""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE wishlist_tracks
+                    SET blacklisted = 0, not_found_count = 0
+                    WHERE spotify_track_id = ? AND profile_id = ?
+                """, (spotify_track_id, profile_id))
+                conn.commit()
+                if cursor.rowcount > 0:
+                    logger.info(f"Unblacklisted track: {spotify_track_id}")
+                    return True
+                logger.debug(f"Track not found for unblacklist: {spotify_track_id}")
+                return False
+        except Exception as e:
+            logger.error(f"Error unblacklisting track: {e}")
+            return False
+
+    def delete_blacklisted_track(self, spotify_track_id: str, profile_id: int = 1) -> bool:
+        """Permanently remove a blacklisted track."""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    DELETE FROM wishlist_tracks
+                    WHERE spotify_track_id = ? AND profile_id = ? AND blacklisted = 1
+                """, (spotify_track_id, profile_id))
+                conn.commit()
+                if cursor.rowcount > 0:
+                    logger.info(f"Permanently deleted blacklisted track: {spotify_track_id}")
+                    return True
+                logger.debug(f"Blacklisted track not found for deletion: {spotify_track_id}")
+                return False
+        except Exception as e:
+            logger.error(f"Error deleting blacklisted track: {e}")
+            return False
+
     def get_wishlist_count(self, profile_id: int = 1, category: Optional[str] = None) -> int:
         """Get the total number of tracks in the wishlist for the given profile,
         optionally filtered by category ('singles' or 'albums')."""
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                query = "SELECT COUNT(*) FROM wishlist_tracks WHERE profile_id = ?"
+                query = "SELECT COUNT(*) FROM wishlist_tracks WHERE profile_id = ? AND (blacklisted IS NULL OR blacklisted = 0)"
                 params: List[Any] = [profile_id]
                 if category == "albums":
                     query += " AND json_extract(spotify_data, '$.album.album_type') = 'album'"

@@ -454,6 +454,48 @@ def add_album_track_to_wishlist(
         return {"success": False, "error": str(exc)}, 500
 
 
+def get_blacklisted_tracks(runtime: WishlistRouteRuntime) -> tuple[Dict[str, Any], int]:
+    """Return all blacklisted tracks."""
+    try:
+        tracks = get_wishlist_service().get_blacklisted_tracks(profile_id=runtime.profile_id)
+        return {"tracks": tracks, "count": len(tracks)}, 200
+    except Exception as exc:
+        runtime.logger.error("Error getting blacklisted tracks: %s", exc)
+        return {"error": str(exc)}, 500
+
+
+def unblacklist_track(runtime: WishlistRouteRuntime, spotify_track_id: str) -> tuple[Dict[str, Any], int]:
+    """Move a blacklisted track back to the active wishlist."""
+    try:
+        if not spotify_track_id:
+            return {"success": False, "error": "No spotify_track_id provided"}, 400
+        success = get_wishlist_service().unblacklist_track(spotify_track_id, profile_id=runtime.profile_id)
+        if success:
+            runtime.logger.info("Unblacklisted track: %s", spotify_track_id)
+            return {"success": True, "message": "Track moved back to wishlist"}, 200
+        runtime.logger.warning("Failed to unblacklist track: %s", spotify_track_id)
+        return {"success": False, "error": "Track not found in blacklist"}, 404
+    except Exception as exc:
+        runtime.logger.error("Error unblacklisting track: %s", exc)
+        return {"success": False, "error": str(exc)}, 500
+
+
+def delete_blacklisted_track(runtime: WishlistRouteRuntime, spotify_track_id: str) -> tuple[Dict[str, Any], int]:
+    """Permanently delete a blacklisted track."""
+    try:
+        if not spotify_track_id:
+            return {"success": False, "error": "No spotify_track_id provided"}, 400
+        success = get_wishlist_service().delete_blacklisted_track(spotify_track_id, profile_id=runtime.profile_id)
+        if success:
+            runtime.logger.info("Permanently deleted blacklisted track: %s", spotify_track_id)
+            return {"success": True, "message": "Track permanently deleted"}, 200
+        runtime.logger.warning("Failed to delete blacklisted track: %s", spotify_track_id)
+        return {"success": False, "error": "Track not found in blacklist"}, 404
+    except Exception as exc:
+        runtime.logger.error("Error deleting blacklisted track: %s", exc)
+        return {"success": False, "error": str(exc)}, 500
+
+
 __all__ = [
     "WishlistRouteRuntime",
     "process_wishlist_api",
@@ -467,4 +509,7 @@ __all__ = [
     "remove_album_from_wishlist",
     "remove_batch_from_wishlist",
     "add_album_track_to_wishlist",
+    "get_blacklisted_tracks",
+    "unblacklist_track",
+    "delete_blacklisted_track",
 ]

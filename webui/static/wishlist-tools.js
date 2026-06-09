@@ -8265,3 +8265,114 @@ function updateDbProgressUI(state) {
 }
 
 // ===================================================================
+// WISHLIST BLACKLIST PAGE
+// Tracks that failed to be found 2+ times — needs manual intervention
+// ===================================================================
+
+async function loadBlacklistPage() {
+    const listEl = document.getElementById('blacklist-tracks-list');
+    const emptyEl = document.getElementById('blacklist-page-empty');
+    const countEl = document.getElementById('blacklist-page-count');
+    const navBadge = document.getElementById('blacklist-nav-badge');
+
+    if (listEl) listEl.innerHTML = '<div class="loading-indicator">Loading...</div>';
+
+    try {
+        const res = await fetch('/api/wishlist/blacklist');
+        const data = await res.json();
+        const tracks = data.tracks || [];
+        const count = tracks.length;
+
+        if (countEl) countEl.textContent = `${count} track${count !== 1 ? 's' : ''}`;
+        if (navBadge) {
+            navBadge.textContent = count;
+            navBadge.classList.toggle('hidden', count === 0);
+        }
+
+        if (!listEl) return;
+
+        if (count === 0) {
+            listEl.innerHTML = '';
+            if (emptyEl) emptyEl.style.display = '';
+            return;
+        }
+
+        if (emptyEl) emptyEl.style.display = 'none';
+
+        listEl.innerHTML = tracks.map(track => {
+            const sd = track.spotify_data || {};
+            const name = _esc(sd.name || track.spotify_track_id || 'Unknown Track');
+            const artists = Array.isArray(sd.artists)
+                ? _esc(sd.artists.map(a => a.name || a).join(', '))
+                : _esc(sd.artist || '');
+            const album = sd.album ? _esc(typeof sd.album === 'string' ? sd.album : (sd.album.name || '')) : '';
+            const failCount = track.not_found_count || 0;
+            const dateAdded = track.date_added ? new Date(track.date_added).toLocaleDateString() : '';
+            const trackId = _esc(track.spotify_track_id || '');
+
+            return `
+                <div class="wishlist-track-row" data-track-id="${trackId}">
+                    <div class="wishlist-track-info">
+                        <div class="wishlist-track-name">${name}</div>
+                        <div class="wishlist-track-meta">
+                            ${artists ? `<span>${artists}</span>` : ''}
+                            ${album ? `<span class="wishlist-track-album">${album}</span>` : ''}
+                        </div>
+                        <div class="wishlist-track-status">
+                            <span class="wishlist-track-failure">Failed ${failCount}&times; &mdash; Not Found</span>
+                            ${dateAdded ? `<span class="wishlist-track-date">${dateAdded}</span>` : ''}
+                        </div>
+                    </div>
+                    <div class="wishlist-track-actions">
+                        <button class="btn btn--secondary btn--sm" onclick="retryBlacklistedTrack('${trackId}', '${name.replace(/'/g, "\\'")}')">
+                            Retry
+                        </button>
+                        <button class="btn btn--danger btn--sm" onclick="deleteBlacklistedTrack('${trackId}', '${name.replace(/'/g, "\\'")}')">
+                            Delete
+                        </button>
+                    </div>
+                </div>`;
+        }).join('');
+
+    } catch (e) {
+        if (listEl) listEl.innerHTML = `<div class="wishlist-error">Error loading blacklist: ${_esc(e.message)}</div>`;
+        console.error('Error loading blacklist page:', e);
+    }
+}
+
+async function retryBlacklistedTrack(trackId, trackName) {
+    try {
+        const res = await fetch(`/api/wishlist/blacklist/${encodeURIComponent(trackId)}/retry`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            showToast(`"${trackName}" moved back to wishlist`, 'success');
+            await loadBlacklistPage();
+        } else {
+            showToast(data.error || 'Failed to retry track', 'error');
+        }
+    } catch (e) {
+        showToast('Error: ' + e.message, 'error');
+    }
+}
+
+async function deleteBlacklistedTrack(trackId, trackName) {
+    if (!await showConfirmDialog({
+        title: 'Delete Track',
+        message: `Permanently delete "${trackName}" from the blacklist? This cannot be undone.`,
+        confirmText: 'Delete',
+    })) return;
+    try {
+        const res = await fetch(`/api/wishlist/blacklist/${encodeURIComponent(trackId)}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.success) {
+            showToast(`"${trackName}" permanently deleted`, 'success');
+            await loadBlacklistPage();
+        } else {
+            showToast(data.error || 'Failed to delete track', 'error');
+        }
+    } catch (e) {
+        showToast('Error: ' + e.message, 'error');
+    }
+}
+
+// ===================================================================

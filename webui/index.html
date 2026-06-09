@@ -225,6 +225,11 @@
                     <span class="nav-text">Wishlist</span>
                     <span class="dl-nav-badge hidden" id="wishlist-nav-badge">0</span>
                 </a>
+                <a class="nav-button" data-page="blacklist" href="/blacklist">
+                    <span class="nav-icon"><svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg></span>
+                    <span class="nav-text">Blacklist</span>
+                    <span class="dl-nav-badge hidden" id="blacklist-nav-badge">0</span>
+                </a>
                 <a class="nav-button" data-page="active-downloads" href="/active-downloads">
                     <span class="nav-icon"><svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span>
                     <span class="nav-text">Downloads</span>
@@ -7075,6 +7080,30 @@
                         </div>
                         <h3>Your wishlist is empty</h3>
                         <p>Failed downloads and tracks from watchlist scans will appear here automatically.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="page" id="blacklist-page">
+                <div class="page-shell wishlist-page-container">
+                    <div class="wishlist-page-header">
+                        <div class="wishlist-page-header-left">
+                            <h2 class="wishlist-page-title">
+                                <span class="wishlist-page-title-icon">&#128683;</span>
+                                Blacklist
+                            </h2>
+                            <div class="wishlist-page-meta">
+                                <span class="wishlist-page-count" id="blacklist-page-count">0 tracks</span>
+                                <span style="font-size:0.8em;opacity:0.6;">Tracks that couldn't be found after 2 attempts &mdash; needs manual intervention</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="blacklist-tracks-list" class="wishlist-tracks-scroll">
+                        <!-- populated by JS -->
+                    </div>
+                    <div class="wishlist-page-empty" id="blacklist-page-empty" style="display:none;">
+                        <h3>No blacklisted tracks</h3>
+                        <p>Tracks that fail to be found after 2 wishlist cycles will appear here.</p>
                     </div>
                 </div>
             </div>

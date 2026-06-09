@@ -136,6 +136,9 @@ from core.wishlist.routes import (
     remove_batch_from_wishlist as _wishlist_remove_batch_from_wishlist,
     remove_track_from_wishlist as _wishlist_remove_track_from_wishlist,
     set_wishlist_cycle as _wishlist_set_wishlist_cycle,
+    get_blacklisted_tracks as _wishlist_get_blacklisted_tracks,
+    unblacklist_track as _wishlist_unblacklist_track,
+    delete_blacklisted_track as _wishlist_delete_blacklisted_track,
 )
 from core.wishlist.processing import (
     add_cancelled_tracks_to_failed_tracks as _add_cancelled_tracks_to_failed_tracks,
@@ -15721,6 +15724,33 @@ def add_album_track_to_wishlist():
         import traceback
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/wishlist/blacklist', methods=['GET'])
+def get_blacklisted_tracks_api():
+    try:
+        runtime = _build_wishlist_route_runtime()
+        payload, status_code = _wishlist_get_blacklisted_tracks(runtime)
+        return jsonify(payload), status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/wishlist/blacklist/<path:track_id>/retry', methods=['POST'])
+def unblacklist_track_api(track_id):
+    try:
+        runtime = _build_wishlist_route_runtime()
+        payload, status_code = _wishlist_unblacklist_track(runtime, track_id)
+        return jsonify(payload), status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/wishlist/blacklist/<path:track_id>', methods=['DELETE'])
+def delete_blacklisted_track_api(track_id):
+    try:
+        runtime = _build_wishlist_route_runtime()
+        payload, status_code = _wishlist_delete_blacklisted_track(runtime, track_id)
+        return jsonify(payload), status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/database/update', methods=['POST'])
 def start_database_update():

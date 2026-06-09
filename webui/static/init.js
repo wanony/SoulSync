@@ -2504,6 +2504,9 @@ async function loadPageData(pageId) {
             case 'wishlist':
                 await initializeWishlistPage();
                 break;
+            case 'blacklist':
+                await loadBlacklistPage();
+                break;
             case 'automations':
                 await loadAutomations();
                 break;

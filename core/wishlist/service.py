@@ -244,6 +244,18 @@ class WishlistService:
         """
         return self.database.update_wishlist_retry(spotify_track_id, success, error_message, profile_id=profile_id)
 
+    def get_blacklisted_tracks(self, profile_id: int = 1) -> List[Dict[str, Any]]:
+        """Get all blacklisted tracks for a profile."""
+        return self.database.get_blacklisted_tracks(profile_id=profile_id)
+
+    def unblacklist_track(self, spotify_track_id: str, profile_id: int = 1) -> bool:
+        """Move a blacklisted track back to the active wishlist (reset counter)."""
+        return self.database.unblacklist_track(spotify_track_id, profile_id=profile_id)
+
+    def delete_blacklisted_track(self, spotify_track_id: str, profile_id: int = 1) -> bool:
+        """Permanently remove a blacklisted track."""
+        return self.database.delete_blacklisted_track(spotify_track_id, profile_id=profile_id)
+
     def remove_track_from_wishlist(self, spotify_track_id: str, profile_id: int = 1) -> bool:
         """Remove a track from the wishlist (typically after successful download)"""
         return self.database.remove_from_wishlist(spotify_track_id, profile_id=profile_id)
