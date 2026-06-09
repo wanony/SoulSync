@@ -28,3 +28,8 @@ bin/
 *.dev.yml
 # Any hidden folders
 **/.*/
+
+# macOS metadata
+._*
+.DS_Store
+.AppleDouble

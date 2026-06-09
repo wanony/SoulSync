@@ -15693,6 +15693,42 @@ def remove_batch_from_wishlist():
         logger.error(f"Error batch removing from wishlist: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+@app.route('/api/wishlist/blacklist', methods=['GET'])
+def get_wishlist_blacklist():
+    """Return wishlist tracks that have been blacklisted after too many failures."""
+    try:
+        database = get_database()
+        tracks = database.get_blacklisted_wishlist_tracks()
+        return jsonify({"success": True, "tracks": tracks})
+    except Exception as e:
+        logger.error(f"Error fetching blacklisted wishlist tracks: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/wishlist/blacklist/<path:track_id>/retry', methods=['POST'])
+def retry_blacklisted_wishlist_track(track_id):
+    """Unblacklist a track so it re-enters the normal wishlist retry cycle."""
+    try:
+        database = get_database()
+        ok = database.unblacklist_wishlist_track(track_id)
+        return jsonify({"success": ok})
+    except Exception as e:
+        logger.error(f"Error retrying blacklisted track {track_id}: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/wishlist/blacklist/<path:track_id>', methods=['DELETE'])
+def delete_blacklisted_wishlist_track(track_id):
+    """Permanently delete a blacklisted track from the wishlist."""
+    try:
+        database = get_database()
+        ok = database.delete_blacklisted_wishlist_track(track_id)
+        return jsonify({"success": ok})
+    except Exception as e:
+        logger.error(f"Error deleting blacklisted track {track_id}: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route('/api/add-album-to-wishlist', methods=['POST'])
 def add_album_track_to_wishlist():
     """Endpoint to add a single track from an album to the wishlist."""

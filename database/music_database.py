@@ -8306,6 +8306,66 @@ class MusicDatabase:
             logger.error(f"Error clearing wishlist: {e}")
             return False
 
+    def get_blacklisted_wishlist_tracks(self, profile_id: int = 1) -> list:
+        """Return wishlist tracks that have been blacklisted (blacklisted=1)."""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, spotify_track_id, spotify_data, not_found_count, date_added
+                    FROM wishlist_tracks
+                    WHERE blacklisted = 1 AND profile_id = ?
+                    ORDER BY date_added DESC
+                """, (profile_id,))
+                rows = cursor.fetchall()
+                result = []
+                for row in rows:
+                    try:
+                        result.append({
+                            'id': row['id'],
+                            'spotify_track_id': row['spotify_track_id'],
+                            'spotify_data': json.loads(row['spotify_data']),
+                            'not_found_count': row['not_found_count'] or 0,
+                            'date_added': row['date_added'],
+                        })
+                    except Exception:
+                        continue
+                return result
+        except Exception as e:
+            logger.error(f"Error getting blacklisted wishlist tracks: {e}")
+            return []
+
+    def unblacklist_wishlist_track(self, spotify_track_id: str) -> bool:
+        """Clear blacklist flag and not_found_count so the track re-enters normal retry flow."""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE wishlist_tracks
+                    SET blacklisted = 0, not_found_count = 0, failure_reason = NULL
+                    WHERE spotify_track_id = ?
+                """, (spotify_track_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"Error unblacklisting wishlist track: {e}")
+            return False
+
+    def delete_blacklisted_wishlist_track(self, spotify_track_id: str) -> bool:
+        """Permanently delete a blacklisted track from the wishlist."""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM wishlist_tracks WHERE spotify_track_id = ? AND blacklisted = 1",
+                    (spotify_track_id,)
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"Error deleting blacklisted wishlist track: {e}")
+            return False
+
     def remove_wishlist_duplicates(self, profile_id: int = 1) -> int:
         """Remove duplicate tracks from wishlist.
         When allow_duplicate_tracks is True, only removes exact duplicates
